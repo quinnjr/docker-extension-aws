@@ -1,0 +1,5 @@
+# Run UI linting if UI files changed
+if git diff --cached --name-only | grep -q "^ui/"; then
+  echo "Running UI lint check..."
+  cd ui && pnpm lint --quiet 2>/dev/null || true
+fi
