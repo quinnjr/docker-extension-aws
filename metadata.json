@@ -1,0 +1,34 @@
+{
+  "icon": "aws-icon.svg",
+  "ui": {
+    "dashboard-tab": {
+      "title": "AWS MFA",
+      "root": "/ui",
+      "src": "index.html"
+    }
+  },
+  "vm": {
+    "image": "${DESKTOP_PLUGIN_IMAGE}"
+  },
+  "host": {
+    "binaries": [
+      {
+        "darwin": [
+          {
+            "path": "/darwin/docker-aws"
+          }
+        ],
+        "linux": [
+          {
+            "path": "/linux/docker-aws"
+          }
+        ],
+        "windows": [
+          {
+            "path": "/windows/docker-aws.exe"
+          }
+        ]
+      }
+    ]
+  }
+}

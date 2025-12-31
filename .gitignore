@@ -1,6 +1,15 @@
+# Dependencies
+ui/node_modules/
+backend/vendor/
+
+# Build artifacts
+ui/dist/
+*.exe
+backend/backend
+
 # Cache files
 *.env
-*.json
+.docker/
 
 # OS files
 .DS_Store
@@ -12,3 +21,7 @@ Thumbs.db
 *~
 .idea/
 .vscode/
+
+# Go
+*.test
+*.out
