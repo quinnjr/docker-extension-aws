@@ -1,10 +1,40 @@
 import { Injectable } from '@angular/core';
 import { createDockerDesktopClient } from '@docker/extension-api-client';
 
+export type CredentialSource = 'auto' | 'linux' | 'wsl2' | 'windows' | 'custom';
+
+export interface AWSPathInfo {
+  source: CredentialSource;
+  configPath: string;
+  credsPath: string;
+  exists: boolean;
+  description: string;
+}
+
+export interface EnvironmentInfo {
+  isWsl2: boolean;
+  isWindows: boolean;
+  isLinux: boolean;
+  isMacOS: boolean;
+  wsl2Distros?: string[];
+  detectedPaths: AWSPathInfo[];
+  activeSource: CredentialSource;
+  homeDir: string;
+  windowsHomeDir?: string;
+}
+
+export interface Settings {
+  credentialSource: CredentialSource;
+  customConfigPath?: string;
+  customCredsPath?: string;
+  wsl2Distro?: string;
+}
+
 export interface Profile {
   name: string;
   region: string;
   mfaSerial: string;
+  source?: string;
 }
 
 export interface Status {
@@ -29,10 +59,29 @@ export interface LoginRequest {
 }
 
 @Injectable({
-  providedIn: 'root'
+  providedIn: 'root',
 })
 export class DockerExtensionService {
   private ddClient = createDockerDesktopClient();
+
+  // Environment and Settings
+
+  async getEnvironment(): Promise<EnvironmentInfo> {
+    const response = await this.ddClient.extension.vm?.service?.get('/environment');
+    return response as EnvironmentInfo;
+  }
+
+  async getSettings(): Promise<Settings> {
+    const response = await this.ddClient.extension.vm?.service?.get('/settings');
+    return response as Settings;
+  }
+
+  async updateSettings(settings: Settings): Promise<Settings> {
+    const response = await this.ddClient.extension.vm?.service?.put('/settings', settings);
+    return response as Settings;
+  }
+
+  // Profiles and Authentication
 
   async getProfiles(): Promise<Profile[]> {
     const response = await this.ddClient.extension.vm?.service?.get('/profiles');
@@ -40,7 +89,9 @@ export class DockerExtensionService {
   }
 
   async getStatus(profile: string): Promise<Status> {
-    const response = await this.ddClient.extension.vm?.service?.get(`/status?profile=${profile}`);
+    const response = await this.ddClient.extension.vm?.service?.get(
+      `/status?profile=${profile}`
+    );
     return response as Status;
   }
 
@@ -55,7 +106,9 @@ export class DockerExtensionService {
   }
 
   async getCredentials(profile: string): Promise<Credentials> {
-    const response = await this.ddClient.extension.vm?.service?.get(`/credentials?profile=${profile}`);
+    const response = await this.ddClient.extension.vm?.service?.get(
+      `/credentials?profile=${profile}`
+    );
     return { ...(response as Credentials), profile };
   }
 

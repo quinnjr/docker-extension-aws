@@ -9,11 +9,15 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -24,7 +28,49 @@ const (
 	cacheDir            = ".docker/aws-mfa-cache"
 	defaultDuration     = 43200 // 12 hours
 	expiryBufferSeconds = 300   // 5 minutes
+	settingsFile        = ".docker/aws-mfa-cache/settings.json"
 )
+
+// CredentialSource represents where to look for AWS credentials
+type CredentialSource string
+
+const (
+	SourceAuto        CredentialSource = "auto"
+	SourceLinux       CredentialSource = "linux"
+	SourceWSL2        CredentialSource = "wsl2"
+	SourceWindows     CredentialSource = "windows"
+	SourceCustom      CredentialSource = "custom"
+)
+
+// Settings stores user preferences
+type Settings struct {
+	CredentialSource CredentialSource `json:"credentialSource"`
+	CustomConfigPath string           `json:"customConfigPath,omitempty"`
+	CustomCredsPath  string           `json:"customCredsPath,omitempty"`
+	WSL2Distro       string           `json:"wsl2Distro,omitempty"`
+}
+
+// EnvironmentInfo provides information about the runtime environment
+type EnvironmentInfo struct {
+	IsWSL2          bool             `json:"isWsl2"`
+	IsWindows       bool             `json:"isWindows"`
+	IsLinux         bool             `json:"isLinux"`
+	IsMacOS         bool             `json:"isMacOS"`
+	WSL2Distros     []string         `json:"wsl2Distros,omitempty"`
+	DetectedPaths   []AWSPathInfo    `json:"detectedPaths"`
+	ActiveSource    CredentialSource `json:"activeSource"`
+	HomeDir         string           `json:"homeDir"`
+	WindowsHomeDir  string           `json:"windowsHomeDir,omitempty"`
+}
+
+// AWSPathInfo describes a potential AWS config location
+type AWSPathInfo struct {
+	Source      CredentialSource `json:"source"`
+	ConfigPath  string           `json:"configPath"`
+	CredsPath   string           `json:"credsPath"`
+	Exists      bool             `json:"exists"`
+	Description string           `json:"description"`
+}
 
 type CachedCredentials struct {
 	AccessKeyID     string    `json:"accessKeyId"`
@@ -38,6 +84,7 @@ type ProfileInfo struct {
 	Name      string `json:"name"`
 	Region    string `json:"region"`
 	MFASerial string `json:"mfaSerial"`
+	Source    string `json:"source,omitempty"`
 }
 
 type LoginRequest struct {
@@ -58,6 +105,288 @@ type ErrorResponse struct {
 	Details string `json:"details,omitempty"`
 }
 
+var currentSettings *Settings
+
+// WSL2 and environment detection
+
+func isWSL2() bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	// Check for WSL2 specific indicators
+	data, err := os.ReadFile("/proc/version")
+	if err != nil {
+		return false
+	}
+	version := strings.ToLower(string(data))
+	return strings.Contains(version, "microsoft") || strings.Contains(version, "wsl")
+}
+
+func getWSL2Distros() []string {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+	cmd := exec.Command("wsl", "--list", "--quiet")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	var distros []string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		// Remove BOM and null characters from WSL output
+		line = strings.Trim(line, "\x00\xef\xbb\xbf")
+		if line != "" {
+			distros = append(distros, line)
+		}
+	}
+	return distros
+}
+
+func getWindowsHomeFromWSL2() string {
+	if !isWSL2() {
+		return ""
+	}
+	// Try to get Windows username
+	cmd := exec.Command("cmd.exe", "/c", "echo %USERPROFILE%")
+	output, err := cmd.Output()
+	if err != nil {
+		// Fallback: try common paths
+		possibleUsers := []string{}
+		entries, _ := os.ReadDir("/mnt/c/Users")
+		for _, e := range entries {
+			if e.IsDir() && e.Name() != "Public" && e.Name() != "Default" && e.Name() != "Default User" {
+				possibleUsers = append(possibleUsers, e.Name())
+			}
+		}
+		if len(possibleUsers) == 1 {
+			return filepath.Join("/mnt/c/Users", possibleUsers[0])
+		}
+		return ""
+	}
+	winPath := strings.TrimSpace(string(output))
+	// Convert Windows path to WSL path
+	if strings.HasPrefix(winPath, "C:") {
+		return "/mnt/c" + strings.ReplaceAll(winPath[2:], "\\", "/")
+	}
+	return ""
+}
+
+func getWSL2PathFromWindows(distro string, linuxPath string) string {
+	// Convert a Linux path to Windows accessible path via \\wsl$
+	return fmt.Sprintf("\\\\wsl$\\%s%s", distro, strings.ReplaceAll(linuxPath, "/", "\\"))
+}
+
+// Path discovery
+
+func discoverAWSPaths() []AWSPathInfo {
+	var paths []AWSPathInfo
+
+	// Native Linux/macOS path
+	homeDir, _ := os.UserHomeDir()
+	nativePath := AWSPathInfo{
+		Source:      SourceLinux,
+		ConfigPath:  filepath.Join(homeDir, ".aws", "config"),
+		CredsPath:   filepath.Join(homeDir, ".aws", "credentials"),
+		Description: "Native home directory",
+	}
+	if runtime.GOOS == "darwin" {
+		nativePath.Source = SourceLinux // Treat macOS same as Linux
+		nativePath.Description = "macOS home directory"
+	}
+	_, err := os.Stat(nativePath.ConfigPath)
+	nativePath.Exists = err == nil
+	paths = append(paths, nativePath)
+
+	// WSL2-specific paths
+	if isWSL2() {
+		// Windows home from WSL2
+		winHome := getWindowsHomeFromWSL2()
+		if winHome != "" {
+			winPath := AWSPathInfo{
+				Source:      SourceWindows,
+				ConfigPath:  filepath.Join(winHome, ".aws", "config"),
+				CredsPath:   filepath.Join(winHome, ".aws", "credentials"),
+				Description: "Windows home directory (via /mnt/c)",
+			}
+			_, err := os.Stat(winPath.ConfigPath)
+			winPath.Exists = err == nil
+			paths = append(paths, winPath)
+		}
+	}
+
+	// Windows native paths
+	if runtime.GOOS == "windows" {
+		userProfile := os.Getenv("USERPROFILE")
+		if userProfile != "" {
+			winPath := AWSPathInfo{
+				Source:      SourceWindows,
+				ConfigPath:  filepath.Join(userProfile, ".aws", "config"),
+				CredsPath:   filepath.Join(userProfile, ".aws", "credentials"),
+				Description: "Windows USERPROFILE",
+				Exists:      true,
+			}
+			_, err := os.Stat(winPath.ConfigPath)
+			winPath.Exists = err == nil
+			paths = append(paths, winPath)
+		}
+
+		// Check WSL2 distros from Windows
+		for _, distro := range getWSL2Distros() {
+			wslPath := AWSPathInfo{
+				Source:      SourceWSL2,
+				ConfigPath:  getWSL2PathFromWindows(distro, "/home"),
+				CredsPath:   getWSL2PathFromWindows(distro, "/home"),
+				Description: fmt.Sprintf("WSL2 distro: %s", distro),
+			}
+			paths = append(paths, wslPath)
+		}
+	}
+
+	return paths
+}
+
+func getEnvironmentInfo() *EnvironmentInfo {
+	info := &EnvironmentInfo{
+		IsWSL2:    isWSL2(),
+		IsWindows: runtime.GOOS == "windows",
+		IsLinux:   runtime.GOOS == "linux" && !isWSL2(),
+		IsMacOS:   runtime.GOOS == "darwin",
+	}
+
+	info.HomeDir, _ = os.UserHomeDir()
+	info.DetectedPaths = discoverAWSPaths()
+
+	if isWSL2() {
+		info.WindowsHomeDir = getWindowsHomeFromWSL2()
+	}
+
+	if runtime.GOOS == "windows" {
+		info.WSL2Distros = getWSL2Distros()
+	}
+
+	settings := loadSettings()
+	info.ActiveSource = settings.CredentialSource
+
+	return info
+}
+
+// Settings management
+
+func getSettingsPath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, settingsFile)
+}
+
+func loadSettings() *Settings {
+	if currentSettings != nil {
+		return currentSettings
+	}
+
+	settings := &Settings{
+		CredentialSource: SourceAuto,
+	}
+
+	data, err := os.ReadFile(getSettingsPath())
+	if err == nil {
+		json.Unmarshal(data, settings)
+	}
+
+	currentSettings = settings
+	return settings
+}
+
+func saveSettings(settings *Settings) error {
+	currentSettings = settings
+
+	dir := filepath.Dir(getSettingsPath())
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(getSettingsPath(), data, 0600)
+}
+
+// AWS path resolution based on settings
+
+func getAWSConfigPath() string {
+	settings := loadSettings()
+
+	switch settings.CredentialSource {
+	case SourceCustom:
+		if settings.CustomConfigPath != "" {
+			return settings.CustomConfigPath
+		}
+	case SourceWindows:
+		if isWSL2() {
+			winHome := getWindowsHomeFromWSL2()
+			if winHome != "" {
+				return filepath.Join(winHome, ".aws", "config")
+			}
+		} else if runtime.GOOS == "windows" {
+			userProfile := os.Getenv("USERPROFILE")
+			return filepath.Join(userProfile, ".aws", "config")
+		}
+	case SourceLinux, SourceWSL2:
+		// Use native Linux path
+	case SourceAuto:
+		// Auto-detect: prefer existing paths
+		paths := discoverAWSPaths()
+		for _, p := range paths {
+			if p.Exists {
+				return p.ConfigPath
+			}
+		}
+	}
+
+	// Default to native home
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".aws", "config")
+}
+
+func getAWSCredentialsPath() string {
+	settings := loadSettings()
+
+	switch settings.CredentialSource {
+	case SourceCustom:
+		if settings.CustomCredsPath != "" {
+			return settings.CustomCredsPath
+		}
+	case SourceWindows:
+		if isWSL2() {
+			winHome := getWindowsHomeFromWSL2()
+			if winHome != "" {
+				return filepath.Join(winHome, ".aws", "credentials")
+			}
+		} else if runtime.GOOS == "windows" {
+			userProfile := os.Getenv("USERPROFILE")
+			return filepath.Join(userProfile, ".aws", "credentials")
+		}
+	case SourceLinux, SourceWSL2:
+		// Use native Linux path
+	case SourceAuto:
+		// Auto-detect: prefer existing paths
+		paths := discoverAWSPaths()
+		for _, p := range paths {
+			if p.Exists {
+				return p.CredsPath
+			}
+		}
+	}
+
+	// Default to native home
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".aws", "credentials")
+}
+
+// Cache management
+
 func getCacheDir() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, cacheDir)
@@ -68,16 +397,6 @@ func getCacheFile(profile string) string {
 		profile = "default"
 	}
 	return filepath.Join(getCacheDir(), profile+".json")
-}
-
-func getAWSConfigPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".aws", "config")
-}
-
-func getAWSCredentialsPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".aws", "credentials")
 }
 
 func loadCachedCredentials(profile string) (*CachedCredentials, error) {
@@ -116,14 +435,17 @@ func isCredentialsValid(creds *CachedCredentials) bool {
 	return time.Now().Add(time.Duration(expiryBufferSeconds) * time.Second).Before(creds.Expiration)
 }
 
+// Profile management
+
 func getProfiles() ([]ProfileInfo, error) {
 	configPath := getAWSConfigPath()
 	cfg, err := ini.Load(configPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load AWS config: %w", err)
+		return nil, fmt.Errorf("failed to load AWS config from %s: %w", configPath, err)
 	}
 
 	var profiles []ProfileInfo
+	settings := loadSettings()
 
 	for _, section := range cfg.Sections() {
 		name := section.Name()
@@ -146,6 +468,7 @@ func getProfiles() ([]ProfileInfo, error) {
 			Name:      profileName,
 			Region:    section.Key("region").String(),
 			MFASerial: mfaSerial,
+			Source:    string(settings.CredentialSource),
 		})
 	}
 
@@ -177,15 +500,47 @@ func getMFASerial(profile string) (string, error) {
 	return mfaSerial, nil
 }
 
+func getProfileCredentials(profile string) (accessKey, secretKey string, err error) {
+	credsPath := getAWSCredentialsPath()
+	cfg, err := ini.Load(credsPath)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to load AWS credentials: %w", err)
+	}
+
+	section, err := cfg.GetSection(profile)
+	if err != nil {
+		return "", "", fmt.Errorf("profile not found in credentials: %s", profile)
+	}
+
+	accessKey = section.Key("aws_access_key_id").String()
+	secretKey = section.Key("aws_secret_access_key").String()
+
+	if accessKey == "" || secretKey == "" {
+		return "", "", fmt.Errorf("missing credentials for profile: %s", profile)
+	}
+
+	return accessKey, secretKey, nil
+}
+
 func performMFALogin(ctx context.Context, profile, tokenCode string, duration int32) (*CachedCredentials, error) {
 	mfaSerial, err := getMFASerial(profile)
 	if err != nil {
 		return nil, err
 	}
 
-	// Load AWS config for the profile
+	// Get base credentials from the credentials file
+	accessKey, secretKey, err := getProfileCredentials(profile)
+	if err != nil {
+		return nil, err
+	}
+
+	// Load AWS config with explicit credentials
+	configPath := getAWSConfigPath()
 	cfg, err := config.LoadDefaultConfig(ctx,
+		config.WithSharedConfigFiles([]string{configPath}),
+		config.WithSharedCredentialsFiles([]string{getAWSCredentialsPath()}),
 		config.WithSharedConfigProfile(profile),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
@@ -234,7 +589,33 @@ func formatTimeRemaining(expiration time.Time) string {
 	return fmt.Sprintf("%dm", minutes)
 }
 
-// Handlers
+// HTTP Handlers
+
+func handleGetEnvironment(c echo.Context) error {
+	return c.JSON(http.StatusOK, getEnvironmentInfo())
+}
+
+func handleGetSettings(c echo.Context) error {
+	return c.JSON(http.StatusOK, loadSettings())
+}
+
+func handleUpdateSettings(c echo.Context) error {
+	var settings Settings
+	if err := c.Bind(&settings); err != nil {
+		return c.JSON(http.StatusBadRequest, ErrorResponse{
+			Error: "Invalid settings",
+		})
+	}
+
+	if err := saveSettings(&settings); err != nil {
+		return c.JSON(http.StatusInternalServerError, ErrorResponse{
+			Error:   "Failed to save settings",
+			Details: err.Error(),
+		})
+	}
+
+	return c.JSON(http.StatusOK, settings)
+}
 
 func handleGetProfiles(c echo.Context) error {
 	profiles, err := getProfiles()
@@ -385,7 +766,9 @@ func handleClearCredentials(c echo.Context) error {
 		// Clear all
 		files, _ := filepath.Glob(filepath.Join(getCacheDir(), "*.json"))
 		for _, f := range files {
-			os.Remove(f)
+			if !strings.HasSuffix(f, "settings.json") {
+				os.Remove(f)
+			}
 		}
 		return c.JSON(http.StatusOK, map[string]string{"message": "All credentials cleared"})
 	}
@@ -450,6 +833,9 @@ func main() {
 	// Ensure cache directory exists
 	os.MkdirAll(getCacheDir(), 0700)
 
+	// Load settings on startup
+	loadSettings()
+
 	e := echo.New()
 	e.HideBanner = true
 
@@ -458,7 +844,12 @@ func main() {
 	e.Use(middleware.Recover())
 	e.Use(middleware.CORS())
 
-	// Routes
+	// Environment and settings routes
+	e.GET("/environment", handleGetEnvironment)
+	e.GET("/settings", handleGetSettings)
+	e.PUT("/settings", handleUpdateSettings)
+
+	// Profile and credential routes
 	e.GET("/profiles", handleGetProfiles)
 	e.GET("/status", handleGetStatus)
 	e.GET("/status/all", handleGetAllStatus)
@@ -484,6 +875,8 @@ func main() {
 	}
 
 	fmt.Printf("Backend listening on %s\n", socketPath)
+	fmt.Printf("Environment: WSL2=%v, Windows=%v, Linux=%v\n", isWSL2(), runtime.GOOS == "windows", runtime.GOOS == "linux")
+
 	if err := http.Serve(listener, e); err != nil && err != io.EOF {
 		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
 		os.Exit(1)

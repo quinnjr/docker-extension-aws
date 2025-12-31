@@ -6,6 +6,9 @@ import {
   Profile,
   Status,
   Credentials,
+  EnvironmentInfo,
+  Settings,
+  CredentialSource,
 } from './services/docker-extension.service';
 
 @Component({
@@ -24,11 +27,19 @@ export class App implements OnInit, OnDestroy {
   success = signal<string | null>(null);
   credentials = signal<Credentials | null>(null);
 
+  // Environment and settings
+  environment = signal<EnvironmentInfo | null>(null);
+  settings = signal<Settings | null>(null);
+  showSettings = signal(false);
+  settingsLoading = signal(false);
+
   private refreshInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(private dockerService: DockerExtensionService) {}
 
   ngOnInit(): void {
+    this.fetchEnvironment();
+    this.fetchSettings();
     this.refreshAll();
     this.refreshInterval = setInterval(() => this.fetchStatuses(), 30000);
   }
@@ -36,6 +47,24 @@ export class App implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     if (this.refreshInterval) {
       clearInterval(this.refreshInterval);
+    }
+  }
+
+  async fetchEnvironment(): Promise<void> {
+    try {
+      const env = await this.dockerService.getEnvironment();
+      this.environment.set(env);
+    } catch (err) {
+      console.error('Failed to fetch environment:', err);
+    }
+  }
+
+  async fetchSettings(): Promise<void> {
+    try {
+      const settings = await this.dockerService.getSettings();
+      this.settings.set(settings);
+    } catch (err) {
+      console.error('Failed to fetch settings:', err);
     }
   }
 
@@ -153,6 +182,83 @@ export class App implements OnInit, OnDestroy {
   onTokenKeyPress(event: KeyboardEvent): void {
     if (event.key === 'Enter') {
       this.handleLogin();
+    }
+  }
+
+  // Settings management
+
+  toggleSettings(): void {
+    this.showSettings.set(!this.showSettings());
+  }
+
+  async updateCredentialSource(source: CredentialSource): Promise<void> {
+    const currentSettings = this.settings();
+    if (!currentSettings) return;
+
+    this.settingsLoading.set(true);
+    try {
+      const newSettings = await this.dockerService.updateSettings({
+        ...currentSettings,
+        credentialSource: source,
+      });
+      this.settings.set(newSettings);
+      this.success.set(`Credential source updated to: ${source}`);
+      // Refresh profiles with new source
+      await this.fetchEnvironment();
+      await this.fetchProfiles();
+    } catch (err) {
+      this.error.set('Failed to update settings');
+    } finally {
+      this.settingsLoading.set(false);
+    }
+  }
+
+  async updateCustomPaths(configPath: string, credsPath: string): Promise<void> {
+    const currentSettings = this.settings();
+    if (!currentSettings) return;
+
+    this.settingsLoading.set(true);
+    try {
+      const newSettings = await this.dockerService.updateSettings({
+        ...currentSettings,
+        credentialSource: 'custom',
+        customConfigPath: configPath,
+        customCredsPath: credsPath,
+      });
+      this.settings.set(newSettings);
+      this.success.set('Custom paths updated');
+      await this.fetchProfiles();
+    } catch (err) {
+      this.error.set('Failed to update custom paths');
+    } finally {
+      this.settingsLoading.set(false);
+    }
+  }
+
+  getEnvironmentLabel(): string {
+    const env = this.environment();
+    if (!env) return 'Loading...';
+    if (env.isWsl2) return 'WSL2';
+    if (env.isWindows) return 'Windows';
+    if (env.isMacOS) return 'macOS';
+    if (env.isLinux) return 'Linux';
+    return 'Unknown';
+  }
+
+  getSourceLabel(source: CredentialSource): string {
+    switch (source) {
+      case 'auto':
+        return 'Auto-detect';
+      case 'linux':
+        return 'Linux (~/.aws)';
+      case 'wsl2':
+        return 'WSL2 Linux';
+      case 'windows':
+        return 'Windows';
+      case 'custom':
+        return 'Custom Path';
+      default:
+        return source;
     }
   }
 }
