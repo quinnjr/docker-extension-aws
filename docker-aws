@@ -1,0 +1,653 @@
+#!/bin/bash
+#
+# Docker CLI Plugin: AWS MFA Credential Helper
+# Automatically handles AWS MFA authentication and injects credentials into Docker
+#
+
+set -e
+
+PLUGIN_NAME="aws"
+PLUGIN_VERSION="1.0.0"
+PLUGIN_VENDOR="Custom"
+PLUGIN_DESCRIPTION="AWS MFA credential helper for Docker"
+
+# Configuration
+CACHE_DIR="${HOME}/.docker/aws-mfa-cache"
+CACHE_EXPIRY_BUFFER=300  # Refresh 5 minutes before expiry
+DEFAULT_SESSION_DURATION=43200  # 12 hours
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Ensure cache directory exists
+mkdir -p "$CACHE_DIR"
+
+#######################################
+# Docker CLI Plugin Metadata (required)
+#######################################
+docker_cli_plugin_metadata() {
+    cat <<EOF
+{
+    "SchemaVersion": "0.1.0",
+    "Vendor": "${PLUGIN_VENDOR}",
+    "Version": "${PLUGIN_VERSION}",
+    "ShortDescription": "${PLUGIN_DESCRIPTION}"
+}
+EOF
+}
+
+#######################################
+# Helper Functions
+#######################################
+
+log_info() {
+    echo -e "${BLUE}[aws]${NC} $1"
+}
+
+log_success() {
+    echo -e "${GREEN}[aws]${NC} $1"
+}
+
+log_warning() {
+    echo -e "${YELLOW}[aws]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[aws]${NC} $1" >&2
+}
+
+get_cache_file() {
+    local profile="${1:-default}"
+    echo "${CACHE_DIR}/${profile}.json"
+}
+
+get_env_file() {
+    local profile="${1:-default}"
+    echo "${CACHE_DIR}/${profile}.env"
+}
+
+get_mfa_serial() {
+    local profile="${1:-default}"
+    local config_profile
+
+    if [ "$profile" = "default" ]; then
+        config_profile="default"
+    else
+        config_profile="profile ${profile}"
+    fi
+
+    aws configure get mfa_serial --profile "$profile" 2>/dev/null || \
+        grep -A5 "\[${config_profile}\]" ~/.aws/config 2>/dev/null | grep mfa_serial | cut -d'=' -f2 | tr -d ' '
+}
+
+is_cache_valid() {
+    local cache_file="$1"
+
+    if [ ! -f "$cache_file" ]; then
+        return 1
+    fi
+
+    local expiration
+    expiration=$(jq -r '.Credentials.Expiration' "$cache_file" 2>/dev/null)
+
+    if [ -z "$expiration" ] || [ "$expiration" = "null" ]; then
+        return 1
+    fi
+
+    local expiry_epoch
+    local current_epoch
+
+    # Convert ISO8601 to epoch
+    expiry_epoch=$(date -d "$expiration" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%S" "${expiration%Z}" +%s 2>/dev/null)
+    current_epoch=$(date +%s)
+
+    # Check if still valid with buffer
+    if [ $((expiry_epoch - CACHE_EXPIRY_BUFFER)) -gt "$current_epoch" ]; then
+        return 0
+    fi
+
+    return 1
+}
+
+get_cached_credentials() {
+    local profile="${1:-default}"
+    local cache_file
+    cache_file=$(get_cache_file "$profile")
+
+    if is_cache_valid "$cache_file"; then
+        cat "$cache_file"
+        return 0
+    fi
+
+    return 1
+}
+
+#######################################
+# Core Functions
+#######################################
+
+do_mfa_login() {
+    local profile="${1:-default}"
+    local token_code="$2"
+    local duration="${3:-$DEFAULT_SESSION_DURATION}"
+
+    local mfa_serial
+    mfa_serial=$(get_mfa_serial "$profile")
+
+    if [ -z "$mfa_serial" ]; then
+        log_error "No MFA serial found for profile: $profile"
+        log_error "Configure mfa_serial in ~/.aws/config"
+        return 1
+    fi
+
+    if [ -z "$token_code" ]; then
+        log_info "MFA Serial: $mfa_serial"
+        echo -n "Enter MFA token code: "
+        read -r token_code
+    fi
+
+    if [ -z "$token_code" ]; then
+        log_error "MFA token code is required"
+        return 1
+    fi
+
+    log_info "Authenticating with MFA for profile: $profile"
+
+    local result
+    if ! result=$(aws sts get-session-token \
+        --profile "$profile" \
+        --serial-number "$mfa_serial" \
+        --token-code "$token_code" \
+        --duration-seconds "$duration" 2>&1); then
+        log_error "MFA authentication failed: $result"
+        return 1
+    fi
+
+    # Cache the credentials
+    local cache_file
+    cache_file=$(get_cache_file "$profile")
+    echo "$result" > "$cache_file"
+    chmod 600 "$cache_file"
+
+    # Generate env file
+    generate_env_file "$profile"
+
+    local expiration
+    expiration=$(echo "$result" | jq -r '.Credentials.Expiration')
+    log_success "Authenticated successfully!"
+    log_info "Credentials expire: $expiration"
+
+    return 0
+}
+
+generate_env_file() {
+    local profile="${1:-default}"
+    local cache_file
+    local env_file
+
+    cache_file=$(get_cache_file "$profile")
+    env_file=$(get_env_file "$profile")
+
+    if [ ! -f "$cache_file" ]; then
+        log_error "No cached credentials for profile: $profile"
+        return 1
+    fi
+
+    local access_key secret_key session_token
+    access_key=$(jq -r '.Credentials.AccessKeyId' "$cache_file")
+    secret_key=$(jq -r '.Credentials.SecretAccessKey' "$cache_file")
+    session_token=$(jq -r '.Credentials.SessionToken' "$cache_file")
+
+    cat > "$env_file" <<EOF
+AWS_ACCESS_KEY_ID=${access_key}
+AWS_SECRET_ACCESS_KEY=${secret_key}
+AWS_SESSION_TOKEN=${session_token}
+EOF
+    chmod 600 "$env_file"
+
+    log_success "Environment file generated: $env_file"
+    return 0
+}
+
+ensure_authenticated() {
+    local profile="${1:-default}"
+
+    if get_cached_credentials "$profile" > /dev/null 2>&1; then
+        return 0
+    fi
+
+    log_warning "Credentials expired or not found for profile: $profile"
+    do_mfa_login "$profile"
+}
+
+get_docker_env_args() {
+    local profile="${1:-default}"
+    local cache_file
+
+    cache_file=$(get_cache_file "$profile")
+
+    if [ ! -f "$cache_file" ]; then
+        return 1
+    fi
+
+    local access_key secret_key session_token
+    access_key=$(jq -r '.Credentials.AccessKeyId' "$cache_file")
+    secret_key=$(jq -r '.Credentials.SecretAccessKey' "$cache_file")
+    session_token=$(jq -r '.Credentials.SessionToken' "$cache_file")
+
+    echo "-e AWS_ACCESS_KEY_ID=${access_key} -e AWS_SECRET_ACCESS_KEY=${secret_key} -e AWS_SESSION_TOKEN=${session_token}"
+}
+
+export_to_shell() {
+    local profile="${1:-default}"
+    local cache_file
+
+    cache_file=$(get_cache_file "$profile")
+
+    if [ ! -f "$cache_file" ]; then
+        log_error "No cached credentials for profile: $profile"
+        return 1
+    fi
+
+    local access_key secret_key session_token
+    access_key=$(jq -r '.Credentials.AccessKeyId' "$cache_file")
+    secret_key=$(jq -r '.Credentials.SecretAccessKey' "$cache_file")
+    session_token=$(jq -r '.Credentials.SessionToken' "$cache_file")
+
+    echo "export AWS_ACCESS_KEY_ID=${access_key}"
+    echo "export AWS_SECRET_ACCESS_KEY=${secret_key}"
+    echo "export AWS_SESSION_TOKEN=${session_token}"
+}
+
+#######################################
+# Command Handlers
+#######################################
+
+cmd_login() {
+    local profile="default"
+    local token=""
+    local duration="$DEFAULT_SESSION_DURATION"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -p|--profile)
+                profile="$2"
+                shift 2
+                ;;
+            -t|--token)
+                token="$2"
+                shift 2
+                ;;
+            -d|--duration)
+                duration="$2"
+                shift 2
+                ;;
+            -h|--help)
+                echo "Usage: docker aws login [OPTIONS]"
+                echo ""
+                echo "Authenticate with AWS MFA"
+                echo ""
+                echo "Options:"
+                echo "  -p, --profile   AWS profile name (default: default)"
+                echo "  -t, --token     MFA token code (prompted if not provided)"
+                echo "  -d, --duration  Session duration in seconds (default: 43200)"
+                return 0
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    do_mfa_login "$profile" "$token" "$duration"
+}
+
+cmd_status() {
+    local profile="default"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -p|--profile)
+                profile="$2"
+                shift 2
+                ;;
+            -a|--all)
+                # Show all cached profiles
+                log_info "Cached credentials:"
+                for cache_file in "$CACHE_DIR"/*.json; do
+                    if [ -f "$cache_file" ]; then
+                        local p
+                        p=$(basename "$cache_file" .json)
+                        if is_cache_valid "$cache_file"; then
+                            local exp
+                            exp=$(jq -r '.Credentials.Expiration' "$cache_file")
+                            echo -e "  ${GREEN}●${NC} $p (expires: $exp)"
+                        else
+                            echo -e "  ${RED}●${NC} $p (expired)"
+                        fi
+                    fi
+                done
+                return 0
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    local cache_file
+    cache_file=$(get_cache_file "$profile")
+
+    if is_cache_valid "$cache_file"; then
+        local expiration
+        expiration=$(jq -r '.Credentials.Expiration' "$cache_file")
+        log_success "Profile '$profile' is authenticated"
+        log_info "Expires: $expiration"
+    else
+        log_warning "Profile '$profile' is not authenticated or expired"
+        return 1
+    fi
+}
+
+cmd_env() {
+    local profile="default"
+    local format="env"
+    local output=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -p|--profile)
+                profile="$2"
+                shift 2
+                ;;
+            -f|--format)
+                format="$2"
+                shift 2
+                ;;
+            -o|--output)
+                output="$2"
+                shift 2
+                ;;
+            --export)
+                format="export"
+                shift
+                ;;
+            -h|--help)
+                echo "Usage: docker aws env [OPTIONS]"
+                echo ""
+                echo "Output AWS credentials in various formats"
+                echo ""
+                echo "Options:"
+                echo "  -p, --profile   AWS profile name (default: default)"
+                echo "  -f, --format    Output format: env, export, docker, json (default: env)"
+                echo "  -o, --output    Output file path"
+                echo "  --export        Shorthand for --format export"
+                echo ""
+                echo "Examples:"
+                echo "  docker aws env                      # Output as KEY=VALUE"
+                echo "  docker aws env --export             # Output as export KEY=VALUE"
+                echo "  docker aws env -o ./aws.env         # Write to file"
+                echo "  eval \$(docker aws env --export)     # Load into current shell"
+                return 0
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    ensure_authenticated "$profile" || return 1
+
+    local cache_file
+    cache_file=$(get_cache_file "$profile")
+
+    local access_key secret_key session_token
+    access_key=$(jq -r '.Credentials.AccessKeyId' "$cache_file")
+    secret_key=$(jq -r '.Credentials.SecretAccessKey' "$cache_file")
+    session_token=$(jq -r '.Credentials.SessionToken' "$cache_file")
+
+    local result=""
+
+    case "$format" in
+        env)
+            result="AWS_ACCESS_KEY_ID=${access_key}
+AWS_SECRET_ACCESS_KEY=${secret_key}
+AWS_SESSION_TOKEN=${session_token}"
+            ;;
+        export)
+            result="export AWS_ACCESS_KEY_ID=${access_key}
+export AWS_SECRET_ACCESS_KEY=${secret_key}
+export AWS_SESSION_TOKEN=${session_token}"
+            ;;
+        docker)
+            result="-e AWS_ACCESS_KEY_ID=${access_key} -e AWS_SECRET_ACCESS_KEY=${secret_key} -e AWS_SESSION_TOKEN=${session_token}"
+            ;;
+        json)
+            result=$(jq '.Credentials' "$cache_file")
+            ;;
+        *)
+            log_error "Unknown format: $format"
+            return 1
+            ;;
+    esac
+
+    if [ -n "$output" ]; then
+        echo "$result" > "$output"
+        chmod 600 "$output"
+        log_success "Written to: $output"
+    else
+        echo "$result"
+    fi
+}
+
+cmd_run() {
+    local profile="default"
+    local docker_args=()
+
+    # Parse our args first
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -p|--profile)
+                profile="$2"
+                shift 2
+                ;;
+            --)
+                shift
+                break
+                ;;
+            -h|--help)
+                echo "Usage: docker aws run [OPTIONS] -- [DOCKER RUN ARGS]"
+                echo ""
+                echo "Run a Docker container with AWS credentials injected"
+                echo ""
+                echo "Options:"
+                echo "  -p, --profile   AWS profile name (default: default)"
+                echo ""
+                echo "Example:"
+                echo "  docker aws run -- -it amazon/aws-cli s3 ls"
+                echo "  docker aws run -p advita -- myimage:latest"
+                return 0
+                ;;
+            *)
+                docker_args+=("$1")
+                shift
+                ;;
+        esac
+    done
+
+    # Remaining args go to docker run
+    docker_args+=("$@")
+
+    ensure_authenticated "$profile" || return 1
+
+    local env_args
+    env_args=$(get_docker_env_args "$profile")
+
+    log_info "Running container with AWS credentials (profile: $profile)"
+
+    # shellcheck disable=SC2086
+    exec docker run $env_args "${docker_args[@]}"
+}
+
+cmd_compose() {
+    local profile="default"
+    local compose_args=()
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -p|--profile)
+                profile="$2"
+                shift 2
+                ;;
+            --)
+                shift
+                break
+                ;;
+            -h|--help)
+                echo "Usage: docker aws compose [OPTIONS] -- [COMPOSE ARGS]"
+                echo ""
+                echo "Run docker compose with AWS credentials available"
+                echo ""
+                echo "Options:"
+                echo "  -p, --profile   AWS profile name (default: default)"
+                echo ""
+                echo "Example:"
+                echo "  docker aws compose -- up -d"
+                echo "  docker aws compose -p advita -- up"
+                return 0
+                ;;
+            *)
+                compose_args+=("$1")
+                shift
+                ;;
+        esac
+    done
+
+    compose_args+=("$@")
+
+    ensure_authenticated "$profile" || return 1
+
+    local env_file
+    env_file=$(get_env_file "$profile")
+    generate_env_file "$profile"
+
+    log_info "Running compose with AWS credentials (profile: $profile)"
+    log_info "Env file: $env_file"
+
+    exec docker compose --env-file "$env_file" "${compose_args[@]}"
+}
+
+cmd_clear() {
+    local profile=""
+    local all=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -p|--profile)
+                profile="$2"
+                shift 2
+                ;;
+            -a|--all)
+                all=true
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    if $all; then
+        rm -f "$CACHE_DIR"/*.json "$CACHE_DIR"/*.env
+        log_success "Cleared all cached credentials"
+    elif [ -n "$profile" ]; then
+        rm -f "$(get_cache_file "$profile")" "$(get_env_file "$profile")"
+        log_success "Cleared credentials for profile: $profile"
+    else
+        rm -f "$(get_cache_file default)" "$(get_env_file default)"
+        log_success "Cleared credentials for default profile"
+    fi
+}
+
+show_help() {
+    cat <<EOF
+Usage: docker aws COMMAND [OPTIONS]
+
+AWS MFA credential helper for Docker
+
+Commands:
+  login     Authenticate with AWS MFA
+  status    Show authentication status
+  env       Output credentials in various formats
+  run       Run a container with AWS credentials injected
+  compose   Run docker compose with AWS credentials
+  clear     Clear cached credentials
+
+Run 'docker aws COMMAND --help' for more information on a command.
+
+Examples:
+  docker aws login                           # Login with default profile
+  docker aws login -p advita                 # Login with specific profile
+  docker aws status -a                       # Show all cached sessions
+  docker aws env -o ./aws.env                # Export to env file
+  eval \$(docker aws env --export)            # Load into current shell
+  docker aws run -- -it aws-cli s3 ls        # Run container with creds
+  docker aws compose -- up -d                # Run compose with creds
+
+EOF
+}
+
+#######################################
+# Main Entry Point
+#######################################
+
+main() {
+    # Handle Docker CLI plugin metadata request
+    if [ "$1" = "docker-cli-plugin-metadata" ]; then
+        docker_cli_plugin_metadata
+        exit 0
+    fi
+
+    # Skip "aws" if called as "docker aws ..."
+    if [ "$1" = "aws" ]; then
+        shift
+    fi
+
+    local command="${1:-help}"
+    shift || true
+
+    case "$command" in
+        login)
+            cmd_login "$@"
+            ;;
+        status)
+            cmd_status "$@"
+            ;;
+        env)
+            cmd_env "$@"
+            ;;
+        run)
+            cmd_run "$@"
+            ;;
+        compose)
+            cmd_compose "$@"
+            ;;
+        clear)
+            cmd_clear "$@"
+            ;;
+        help|--help|-h)
+            show_help
+            ;;
+        *)
+            log_error "Unknown command: $command"
+            show_help
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
