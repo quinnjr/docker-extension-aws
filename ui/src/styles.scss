@@ -1,1 +1,31 @@
 /* You can add global styles to this file, and also import other style files */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  background-color: #1a1a2e; // Dark theme default
+  color: #ffffff;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+// Light theme override
+html[data-theme="light"],
+html[data-theme="light"] body {
+  background-color: #f7fafc;
+  color: #1a202c;
+}
+
+// System preference for light mode
+@media (prefers-color-scheme: light) {
+  html:not([data-theme="dark"]),
+  html:not([data-theme="dark"]) body {
+    background-color: #f7fafc;
+    color: #1a202c;
+  }
+}
