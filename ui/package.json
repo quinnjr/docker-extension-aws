@@ -23,7 +23,7 @@
   "private": true,
   "packageManager": "pnpm@9.15.0",
   "dependencies": {
-    "@docker/extension-api-client": "^0.3.4",
+    "@docker/extension-api-client": "^0.4.2",
     "@angular/common": "^21.0.0",
     "@angular/compiler": "^21.0.0",
     "@angular/core": "^21.0.0",

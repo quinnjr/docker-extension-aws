@@ -27,8 +27,8 @@ importers:
         specifier: ^21.0.0
         version: 21.0.6(@angular/common@21.0.6(@angular/core@21.0.6(@angular/compiler@21.0.6)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@21.0.6(@angular/compiler@21.0.6)(rxjs@7.8.2))(@angular/platform-browser@21.0.6(@angular/common@21.0.6(@angular/core@21.0.6(@angular/compiler@21.0.6)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@21.0.6(@angular/compiler@21.0.6)(rxjs@7.8.2)))(rxjs@7.8.2)
       '@docker/extension-api-client':
-        specifier: ^0.3.4
-        version: 0.3.4
+        specifier: ^0.4.2
+        version: 0.4.2
       rxjs:
         specifier: ~7.8.0
         version: 7.8.2
@@ -331,11 +331,11 @@ packages:
     resolution: {integrity: sha512-0ZrskXVEHSWIqZM/sQZ4EV3jZJXRkio/WCxaqKZP1g//CEWEPSfeZFcms4XeKBCHU0ZKnIkdJeU/kF+eRp5lBg==}
     engines: {node: '>=6.9.0'}
 
-  '@docker/extension-api-client-types@0.3.4':
-    resolution: {integrity: sha512-cDdD+dNSE0XCvQiw0R4j9aHpK+p6E7vi+z7RbKXfxwuQpfEMoeNCKFlp4W7K3XT78iWmoPz3DxQtZEAe4VJ1oQ==}
+  '@docker/extension-api-client-types@0.4.2':
+    resolution: {integrity: sha512-nsIFZ67B09q9rY0vOnWSTIM8+wcrxjVtKvDxu66WrEOiBQhrObPRUmyXDQuTyR+vSLlU0nunKexLLp2ge+d5vA==}
 
-  '@docker/extension-api-client@0.3.4':
-    resolution: {integrity: sha512-bPfMyIy/mf1ir8lhc7qeVWEV0VF/JZShr5UjFcDxG79JW3umCOGU4c17EtYqwk8EY1kF3exWM6G1ITHOETUmGw==}
+  '@docker/extension-api-client@0.4.2':
+    resolution: {integrity: sha512-8iT3Wy1qqqTYgrI2YC/ShFC3D3oFbKVptgeh2VQ0hy+Ywb5pwD3Qi5Qr+L5lYakw5LUqMQSjQa3p7J9OxLF+0Q==}
 
   '@emnapi/core@1.8.1':
     resolution: {integrity: sha512-AvT9QFpxK0Zd8J0jopedNm+w/2fIzvtPKPjqyw9jwvBaReTTqPBk9Hixaz7KbjimP+QNz605/XnjFcDAL2pqBg==}
@@ -2957,11 +2957,11 @@ snapshots:
       '@babel/helper-string-parser': 7.27.1
       '@babel/helper-validator-identifier': 7.28.5
 
-  '@docker/extension-api-client-types@0.3.4': {}
+  '@docker/extension-api-client-types@0.4.2': {}
 
-  '@docker/extension-api-client@0.3.4':
+  '@docker/extension-api-client@0.4.2':
     dependencies:
-      '@docker/extension-api-client-types': 0.3.4
+      '@docker/extension-api-client-types': 0.4.2
 
   '@emnapi/core@1.8.1':
     dependencies:
