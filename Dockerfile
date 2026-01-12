@@ -1,5 +1,5 @@
 # Build the Go backend
-FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS builder
 
 WORKDIR /app
 
@@ -19,7 +19,7 @@ ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o /backend .
 
 # Build CLI binary for host installation
-FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS cli-builder
+FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS cli-builder
 
 WORKDIR /app
 COPY backend/go.mod backend/go.sum ./
@@ -52,7 +52,7 @@ RUN pnpm run build
 # Final image
 FROM alpine:3.19
 
-LABEL org.opencontainers.image.title="AWS MFA Credentials" \
+LABEL org.opencontainers.image.title="AWS-MFA-Credentials" \
     org.opencontainers.image.description="Manage AWS MFA credentials for Docker containers with automatic session token generation" \
     org.opencontainers.image.vendor="quinnjr" \
     org.opencontainers.image.source="https://github.com/quinnjr/docker-plugin-aws" \
