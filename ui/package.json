@@ -24,7 +24,7 @@
   "packageManager": "pnpm@9.15.0",
   "dependencies": {
     "@docker/extension-api-client": "^0.4.2",
-    "@angular/common": "^21.0.0",
+    "@angular/common": "^21.2.0",
     "@angular/compiler": "^21.0.0",
     "@angular/core": "^21.1.6",
     "@angular/forms": "^21.2.0",
