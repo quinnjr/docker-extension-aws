@@ -4,6 +4,21 @@ A Docker Desktop Extension that automatically handles AWS MFA authentication and
 
 ![AWS MFA Extension](screenshots/login.png)
 
+## Status
+
+**Stable.** Published on Docker Hub as `quinnjr/docker-aws-mfa`. Supports amd64 and arm64 architectures.
+
+## Tech Stack
+
+| Component | Technology |
+|-----------|-----------|
+| **Backend** | Go 1.24 (Alpine, static binary) |
+| **UI** | Angular 21 (Docker Desktop dashboard tab) |
+| **CLI** | Go (cross-compiled for macOS, Linux, Windows) |
+| **Build** | Docker multi-stage, buildx multi-arch |
+| **Package manager** | pnpm 9 (UI) |
+| **License** | MIT |
+
 ## Features
 
 - **Visual Dashboard**: Manage AWS MFA credentials directly from Docker Desktop
@@ -120,19 +135,25 @@ make push
 2. Push to Docker Hub: `make push`
 3. Submit to [Docker Extension Marketplace](https://hub.docker.com/extensions)
 
-## Architecture
+## Project Structure
 
 ```
 docker-plugin-aws/
-├── backend/           # Go backend for AWS operations
-│   └── main.go
-├── ui/                # React frontend
+├── backend/             # Go backend (AWS STS operations)
+│   ├── main.go          # HTTP handlers + AWS MFA logic
+│   ├── proxy.go         # Docker VM socket proxy
+│   ├── go.mod
+│   └── go.sum
+├── ui/                  # Angular frontend (Docker Desktop tab)
 │   └── src/
-│       ├── App.tsx
-│       └── main.tsx
-├── Dockerfile         # Multi-stage build
-├── metadata.json      # Extension metadata
-└── Makefile          # Build automation
+├── Dockerfile           # Multi-stage build (Go + Angular + CLI)
+├── docker-compose.yaml  # Docker Desktop VM service
+├── metadata.json        # Extension metadata (UI, VM, CLI binaries)
+├── entrypoint.sh        # Container entry point
+├── Makefile             # Build automation
+├── install.sh           # Local installation script
+├── install-remote.sh    # Remote installation script
+└── screenshots/         # Documentation screenshots
 ```
 
 ## How It Works
@@ -141,6 +162,13 @@ docker-plugin-aws/
 2. **UI**: React dashboard communicates with backend via Docker Extension API
 3. **CLI**: Binary installed on host for terminal workflows
 4. **Caching**: Credentials cached in `~/.docker/aws-mfa-cache/` with auto-expiry
+
+## Related Repos
+
+| Repo | Relationship |
+|------|-------------|
+| `aws-local` | Local AWS service emulator (separate concern -- no MFA needed) |
+| `lexmata-infrastructure` | Pulumi AWS infrastructure that requires MFA-authenticated credentials |
 
 ## License
 
