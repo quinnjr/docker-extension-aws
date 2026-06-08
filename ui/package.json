@@ -28,7 +28,7 @@
     "@angular/compiler": "^21.2.4",
     "@angular/core": "^21.2.4",
     "@angular/forms": "^21.2.16",
-    "@angular/platform-browser": "^21.2.15",
+    "@angular/platform-browser": "^21.2.16",
     "@angular/router": "^21.2.15",
     "rxjs": "~7.8.0",
     "tslib": "^2.3.0"
