@@ -1,5 +1,5 @@
 # Build the Go backend
-FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
@@ -19,7 +19,7 @@ ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o /backend .
 
 # Build CLI binary for host installation
-FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS cli-builder
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS cli-builder
 
 WORKDIR /app
 COPY backend/go.mod backend/go.sum ./
