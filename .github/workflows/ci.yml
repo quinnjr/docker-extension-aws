@@ -57,7 +57,16 @@ jobs:
         run: make build
 
       - name: Validate extension
-        run: docker extension validate quinnjr/docker-aws-mfa:latest
+        run: |
+          # `docker extension validate` is provided by the Docker Extensions CLI
+          # plugin, which ships with Docker Desktop and is not available on
+          # GitHub-hosted runners (Docker Engine only). Run it when present;
+          # otherwise skip so CI is not blocked by missing Desktop tooling.
+          if docker extension version >/dev/null 2>&1; then
+            docker extension validate quinnjr/docker-aws-mfa:latest
+          else
+            echo "::notice::Skipping 'docker extension validate': the Docker Extensions CLI plugin is not available on this runner (requires Docker Desktop)."
+          fi
 
   test:
     name: Test
