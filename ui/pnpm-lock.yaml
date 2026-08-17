@@ -18,8 +18,8 @@ importers:
         specifier: ^21.2.19
         version: 21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2)
       '@angular/forms':
-        specifier: ^21.2.17
-        version: 21.2.17(@angular/common@21.2.19(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2))(@angular/platform-browser@21.2.19(@angular/common@21.2.19(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2)))(rxjs@7.8.2)
+        specifier: ^21.2.20
+        version: 21.2.20(@angular/common@21.2.19(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2))(@angular/platform-browser@21.2.19(@angular/common@21.2.19(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2)))(rxjs@7.8.2)
       '@angular/platform-browser':
         specifier: ^21.2.19
         version: 21.2.19(@angular/common@21.2.19(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2))
@@ -229,13 +229,13 @@ packages:
       zone.js:
         optional: true
 
-  '@angular/forms@21.2.17':
-    resolution: {integrity: sha512-WKu8XeRSNZo+a+aDDZ3M5OtReF7KYqR/PmZ2l1lSf6N5EEAmc+Ky4aqbRhTL/mTSfHrO4+TDJ4C5A2tFmuwIeA==}
+  '@angular/forms@21.2.20':
+    resolution: {integrity: sha512-OP1/UtMGBfJEVGs85ns1jSYVyyezQRQYPG1ReUDzGPGRt62+JQkLdtHYu6RKwkXzW+LF2mt8cpIb4YfhxnnYrA==}
     engines: {node: ^20.19.0 || ^22.12.0 || >=24.0.0}
     peerDependencies:
-      '@angular/common': 21.2.17
-      '@angular/core': 21.2.17
-      '@angular/platform-browser': 21.2.17
+      '@angular/common': 21.2.20
+      '@angular/core': 21.2.20
+      '@angular/platform-browser': 21.2.20
       rxjs: ^6.5.3 || ^7.4.0
 
   '@angular/platform-browser@21.2.19':
@@ -2656,7 +2656,7 @@ snapshots:
     optionalDependencies:
       '@angular/compiler': 21.2.19
 
-  '@angular/forms@21.2.17(@angular/common@21.2.19(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2))(@angular/platform-browser@21.2.19(@angular/common@21.2.19(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2)))(rxjs@7.8.2)':
+  '@angular/forms@21.2.20(@angular/common@21.2.19(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2))(@angular/platform-browser@21.2.19(@angular/common@21.2.19(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2)))(rxjs@7.8.2)':
     dependencies:
       '@angular/common': 21.2.19(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2))(rxjs@7.8.2)
       '@angular/core': 21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2)
