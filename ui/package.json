@@ -29,7 +29,7 @@
     "@angular/core": "^21.2.19",
     "@angular/forms": "^21.2.20",
     "@angular/platform-browser": "^21.2.19",
-    "@angular/router": "^21.2.20",
+    "@angular/router": "^21.2.21",
     "rxjs": "~7.8.0",
     "tslib": "^2.3.0"
   },
