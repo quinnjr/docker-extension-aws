@@ -45,7 +45,7 @@ jobs:
         run: docker extension validate quinnjr/docker-aws-mfa:v${{ steps.version.outputs.VERSION }}
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           body: |
